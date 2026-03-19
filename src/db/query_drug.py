@@ -1,3 +1,7 @@
+"""
+Oracle DB 쿼리 함수 모음
+약 검색 / 상세정보 / DUR 경고 / 낱알 검색 / RAG 청크
+"""
 import os
 import oracledb
 from dotenv import load_dotenv
@@ -6,83 +10,216 @@ load_dotenv()
 
 def get_connection():
     return oracledb.connect(
-        user=os.environ.get("DB_USER", "kim1"),
-        password=os.environ.get("DB_PASSWORD", "1"),
-        dsn=os.environ.get("DB_DSN", "192.168.0.80:1521/XE")
+        user=os.environ.get("DB_USER", "medi"),
+        password=os.environ.get("DB_PASSWORD", "1234"),
+        dsn=os.environ.get("DB_DSN", "72.155.73.199:1521/xe")
     )
 
-def normalize_text(text: str) -> str:
-    if text is None:
-        return ""
-    return str(text).upper().replace("-", "").replace(" ", "").replace("_", "")
 
-def read_lob(value):
-    if value is None:
-        return None
-    try:
-        return value.read()
-    except AttributeError:
-        return value
-
-def score_ocr_match(ocr_norm_list, print_front, print_back):
-    score = 0.0
-    for ocr_text in ocr_norm_list:
-        ocr_norm = normalize_text(ocr_text)
-        if not ocr_norm:
-            continue
-        for target in [normalize_text(print_front), normalize_text(print_back)]:
-            if not target:
-                continue
-            if ocr_norm == target:
-                score = max(score, 1.0)
-            elif len(ocr_norm) >= 2 and ocr_norm in target:
-                score = max(score, 0.6)
-            elif len(target) >= 2 and target in ocr_norm:
-                score = max(score, 0.5)
-    return score
-
-def query_drug(topk_candidates, ocr_result):
+# ============================================================
+# 약 이름으로 검색
+# ============================================================
+def search_drug_by_name(name: str, limit: int = 10) -> list:
     conn = get_connection()
     cursor = conn.cursor()
-    try:
-        item_seqs = [str(x["item_seq"]) for x in topk_candidates]
-        ai_score_map = {str(x["item_seq"]): float(x["score"]) for x in topk_candidates}
-        ocr_norm_list = ocr_result.get("ocr_norm", [])
-        if not item_seqs:
-            return {"selected_item": None, "candidates": [], "message": "topk 후보가 없습니다."}
-        placeholders = ",".join([f":{i+1}" for i in range(len(item_seqs))])
-        sql = f"""
-            SELECT p.ITEM_SEQ, p.ITEM_NAME, p.ENTP_NAME, p.ETC_OTC_CODE,
-                   f.PRINT_FRONT, f.PRINT_BACK, f.DRUG_SHAPE, f.COLOR_CLASS1, f.COLOR_CLASS2,
-                   d.EFCY_QESITM, d.USE_METHOD_QESITM, d.ATPN_QESITM, d.INTRC_QESITM
-            FROM REF_DRUG_PERMIT_LIST p
-            LEFT JOIN PILL_IMAGE_FEATURE f ON p.ITEM_SEQ = f.ITEM_SEQ
-            LEFT JOIN REF_DRUG_PERMIT_DETAIL d ON p.ITEM_SEQ = d.ITEM_SEQ
-            WHERE p.ITEM_SEQ IN ({placeholders})
-        """
-        cursor.execute(sql, item_seqs)
-        candidates = []
-        for row in cursor.fetchall():
-            item_seq = str(row[0])
-            ai_score = ai_score_map.get(item_seq, 0.0)
-            ocr_score = score_ocr_match(ocr_norm_list, row[4], row[5])
-            candidates.append({
-                "item_seq": item_seq, "item_name": row[1], "entp_name": row[2],
-                "etc_otc_code": row[3], "print_front": row[4], "print_back": row[5],
-                "drug_shape": row[6], "color_class1": row[7], "color_class2": row[8],
-                "ai_score": round(ai_score, 4), "ocr_match_score": round(ocr_score, 4),
-                "final_score": round((0.8 * ai_score) + (0.2 * ocr_score), 4),
-                "effect": read_lob(row[9]), "usage": read_lob(row[10]),
-                "warning": read_lob(row[11]), "interaction": read_lob(row[12])
-            })
-        candidates.sort(key=lambda x: x["final_score"], reverse=True)
-        if not candidates:
-            return {"selected_item": None, "candidates": [], "message": "DB에서 후보를 찾지 못했습니다."}
-        selected = candidates[0]
-        return {
-            "selected_item": {"item_seq": selected["item_seq"], "item_name": selected["item_name"], "confidence": selected["final_score"]},
-            "candidates": candidates, "message": "후보 재정렬 완료"
-        }
-    finally:
+
+    cursor.execute("""
+        SELECT p.ITEM_SEQ, p.ITEM_NAME, p.ENTP_NAME, p.ETC_OTC_CODE,
+               o.SUMMARY, pi.DRUG_SHAPE, pi.COLOR_CLASS1, pi.ITEM_IMAGE_URL
+        FROM REF_DRUG_PERMIT_LIST p
+        LEFT JOIN REF_DRUG_OVERVIEW o ON p.ITEM_SEQ = o.ITEM_SEQ
+        LEFT JOIN PILL_IMAGE_FEATURE pi ON p.ITEM_SEQ = pi.ITEM_SEQ
+        WHERE UPPER(p.ITEM_NAME) LIKE UPPER(:1)
+        AND p.CANCEL_DATE IS NULL
+        FETCH FIRST :2 ROWS ONLY
+    """, [f"%{name}%", limit])
+
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    cursor.close()
+    conn.close()
+
+    return [dict(zip(cols, row)) for row in rows]
+
+
+# ============================================================
+# 약 상세정보 조회
+# ============================================================
+def get_drug_detail(item_seq: str) -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # 기본정보
+    cursor.execute("""
+        SELECT p.ITEM_SEQ, p.ITEM_NAME, p.ENTP_NAME, p.ETC_OTC_CODE, p.ITEM_PERMIT_DATE,
+               d.EFCY_QESITM, d.USE_METHOD_QESITM, d.ATPN_WARN_QESITM,
+               d.ATPN_QESITM, d.INTRC_QESITM, d.SE_QESITM,
+               o.SUMMARY, o.CAUTION, o.STORAGE_METHOD,
+               pi.DRUG_SHAPE, pi.COLOR_CLASS1, pi.COLOR_CLASS2,
+               pi.PRINT_FRONT, pi.PRINT_BACK, pi.ITEM_IMAGE_URL
+        FROM REF_DRUG_PERMIT_LIST p
+        LEFT JOIN REF_DRUG_PERMIT_DETAIL d ON p.ITEM_SEQ = d.ITEM_SEQ
+        LEFT JOIN REF_DRUG_OVERVIEW o ON p.ITEM_SEQ = o.ITEM_SEQ
+        LEFT JOIN PILL_IMAGE_FEATURE pi ON p.ITEM_SEQ = pi.ITEM_SEQ
+        WHERE p.ITEM_SEQ = :1
+    """, [item_seq])
+
+    row = cursor.fetchone()
+    if not row:
         cursor.close()
         conn.close()
+        return None
+
+    cols = [desc[0] for desc in cursor.description]
+    result = dict(zip(cols, row))
+
+    # 성분 목록
+    cursor.execute("""
+        SELECT INGR_NAME, INGR_ENG_NAME, INGR_AMOUNT, INGR_UNIT
+        FROM REF_DRUG_INGREDIENT
+        WHERE ITEM_SEQ = :1
+    """, [item_seq])
+
+    ingr_rows = cursor.fetchall()
+    result['INGREDIENTS'] = [
+        {
+            "name": r[0],
+            "eng_name": r[1],
+            "amount": r[2],
+            "unit": r[3]
+        } for r in ingr_rows
+    ]
+
+    cursor.close()
+    conn.close()
+
+    return result
+
+
+# ============================================================
+# DUR 병용금기/경고 조회
+# ============================================================
+def get_dur_warnings(item_seq: str, type_name: str = None) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if type_name:
+        cursor.execute("""
+            SELECT WARNING_ID, ITEM_SEQ, TYPE_NAME, PROHBT_CONTENT,
+                   MIX_ITEM_SEQ, GRADE, NOTIFICATION_DATE
+            FROM REF_DUR_ITEM_WARNING
+            WHERE ITEM_SEQ = :1 AND TYPE_NAME = :2
+            ORDER BY GRADE, TYPE_NAME
+        """, [item_seq, type_name])
+    else:
+        cursor.execute("""
+            SELECT WARNING_ID, ITEM_SEQ, TYPE_NAME, PROHBT_CONTENT,
+                   MIX_ITEM_SEQ, GRADE, NOTIFICATION_DATE
+            FROM REF_DUR_ITEM_WARNING
+            WHERE ITEM_SEQ = :1
+            ORDER BY GRADE, TYPE_NAME
+        """, [item_seq])
+
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    cursor.close()
+    conn.close()
+
+    return [dict(zip(cols, row)) for row in rows]
+
+
+# ============================================================
+# 낱알 모양/색상/각인으로 검색
+# ============================================================
+def search_pill_by_shape(
+    shape: str = None,
+    color: str = None,
+    print_text: str = None,
+    limit: int = 20
+) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    conditions = ["p.CANCEL_DATE IS NULL"]
+    params = []
+
+    if shape:
+        conditions.append("pi.DRUG_SHAPE = :shape")
+        params.append(shape)
+    if color:
+        conditions.append("(pi.COLOR_CLASS1 = :color OR pi.COLOR_CLASS2 = :color)")
+        params.append(color)
+        params.append(color)
+    if print_text:
+        conditions.append("(UPPER(pi.PRINT_FRONT) LIKE UPPER(:print) OR UPPER(pi.PRINT_BACK) LIKE UPPER(:print))")
+        params.append(f"%{print_text}%")
+        params.append(f"%{print_text}%")
+
+    where = " AND ".join(conditions)
+
+    cursor.execute(f"""
+        SELECT p.ITEM_SEQ, p.ITEM_NAME, p.ENTP_NAME,
+               pi.DRUG_SHAPE, pi.COLOR_CLASS1, pi.COLOR_CLASS2,
+               pi.PRINT_FRONT, pi.PRINT_BACK,
+               pi.LENG_LONG, pi.LENG_SHORT, pi.THICK,
+               pi.ITEM_IMAGE_URL
+        FROM REF_DRUG_PERMIT_LIST p
+        JOIN PILL_IMAGE_FEATURE pi ON p.ITEM_SEQ = pi.ITEM_SEQ
+        WHERE {where}
+        FETCH FIRST :limit ROWS ONLY
+    """, params + [limit])
+
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    cursor.close()
+    conn.close()
+
+    return [dict(zip(cols, row)) for row in rows]
+
+
+# ============================================================
+# RAG 청크 조회
+# ============================================================
+def get_rag_chunks(item_seq: str, section_type: str = None) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if section_type:
+        cursor.execute("""
+            SELECT CHUNK_ID, ITEM_SEQ, SOURCE_TYPE, SECTION_TYPE, CHUNK_TEXT
+            FROM RAG_CHUNK
+            WHERE ITEM_SEQ = :1 AND SECTION_TYPE = :2
+            ORDER BY SOURCE_TYPE, SECTION_TYPE
+        """, [item_seq, section_type])
+    else:
+        cursor.execute("""
+            SELECT CHUNK_ID, ITEM_SEQ, SOURCE_TYPE, SECTION_TYPE, CHUNK_TEXT
+            FROM RAG_CHUNK
+            WHERE ITEM_SEQ = :1
+            ORDER BY SOURCE_TYPE, SECTION_TYPE
+        """, [item_seq])
+
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    cursor.close()
+    conn.close()
+
+    return [dict(zip(cols, row)) for row in rows]
+# ============================================================
+# run_pipeline.py 호환용 래퍼 함수
+# ============================================================
+def query_drug(topk: list, ocr_result: dict) -> dict:
+    """run_pipeline에서 호출하는 함수 - topk 결과로 약 정보 조회"""
+    results = []
+    for item in topk:
+        item_seq = str(item.get("item_seq", ""))
+        if not item_seq:
+            continue
+        detail = get_drug_detail(item_seq)
+        if detail:
+            results.append(detail)
+
+    return {
+        "candidates": results,
+        "ocr": ocr_result
+    }
