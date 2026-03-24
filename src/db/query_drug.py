@@ -15,6 +15,26 @@ def get_connection():
         dsn=os.environ.get("DB_DSN", "72.155.73.199:1521/xe")
     )
 
+def row_to_dict(cursor, row):
+    """CLOB 포함한 Oracle row를 dict로 변환"""
+    result = {}
+    for i, col in enumerate(cursor.description):
+        val = row[i]
+        if val is None:
+            result[col[0]] = None
+        elif hasattr(val, 'read'):  # CLOB 타입
+            try:
+                result[col[0]] = val.read()
+            except Exception:
+                result[col[0]] = None
+        else:
+            result[col[0]] = val
+    return result
+
+def rows_to_list(cursor, rows):
+    """여러 row를 dict 리스트로 변환"""
+    return [row_to_dict(cursor, row) for row in rows]
+
 
 # ============================================================
 # 약 이름으로 검색
@@ -35,11 +55,10 @@ def search_drug_by_name(name: str, limit: int = 10) -> list:
     """, [f"%{name}%", limit])
 
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    result = rows_to_list(cursor, rows)
     cursor.close()
     conn.close()
-
-    return [dict(zip(cols, row)) for row in rows]
+    return result
 
 
 # ============================================================
@@ -49,7 +68,6 @@ def get_drug_detail(item_seq: str) -> dict:
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 기본정보
     cursor.execute("""
         SELECT p.ITEM_SEQ, p.ITEM_NAME, p.ENTP_NAME, p.ETC_OTC_CODE, p.ITEM_PERMIT_DATE,
                d.EFCY_QESITM, d.USE_METHOD_QESITM, d.ATPN_WARN_QESITM,
@@ -70,8 +88,7 @@ def get_drug_detail(item_seq: str) -> dict:
         conn.close()
         return None
 
-    cols = [desc[0] for desc in cursor.description]
-    result = dict(zip(cols, row))
+    result = row_to_dict(cursor, row)
 
     # 성분 목록
     cursor.execute("""
@@ -92,7 +109,6 @@ def get_drug_detail(item_seq: str) -> dict:
 
     cursor.close()
     conn.close()
-
     return result
 
 
@@ -121,11 +137,10 @@ def get_dur_warnings(item_seq: str, type_name: str = None) -> list:
         """, [item_seq])
 
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    result = rows_to_list(cursor, rows)
     cursor.close()
     conn.close()
-
-    return [dict(zip(cols, row)) for row in rows]
+    return result
 
 
 # ============================================================
@@ -147,11 +162,11 @@ def search_pill_by_shape(
         conditions.append("pi.DRUG_SHAPE = :shape")
         params.append(shape)
     if color:
-        conditions.append("(pi.COLOR_CLASS1 = :color OR pi.COLOR_CLASS2 = :color)")
+        conditions.append("(pi.COLOR_CLASS1 = :color1 OR pi.COLOR_CLASS2 = :color2)")
         params.append(color)
         params.append(color)
     if print_text:
-        conditions.append("(UPPER(pi.PRINT_FRONT) LIKE UPPER(:print) OR UPPER(pi.PRINT_BACK) LIKE UPPER(:print))")
+        conditions.append("(UPPER(pi.PRINT_FRONT) LIKE UPPER(:print1) OR UPPER(pi.PRINT_BACK) LIKE UPPER(:print2))")
         params.append(f"%{print_text}%")
         params.append(f"%{print_text}%")
 
@@ -170,11 +185,10 @@ def search_pill_by_shape(
     """, params + [limit])
 
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    result = rows_to_list(cursor, rows)
     cursor.close()
     conn.close()
-
-    return [dict(zip(cols, row)) for row in rows]
+    return result
 
 
 # ============================================================
@@ -200,11 +214,12 @@ def get_rag_chunks(item_seq: str, section_type: str = None) -> list:
         """, [item_seq])
 
     rows = cursor.fetchall()
-    cols = [desc[0] for desc in cursor.description]
+    result = rows_to_list(cursor, rows)
     cursor.close()
     conn.close()
+    return result
 
-    return [dict(zip(cols, row)) for row in rows]
+
 # ============================================================
 # run_pipeline.py 호환용 래퍼 함수
 # ============================================================
