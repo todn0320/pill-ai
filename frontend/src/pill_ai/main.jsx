@@ -26,6 +26,9 @@ const Main = () => {
             <div className="nav-item">
               <div className="nav-dot"></div>내 약함
             </div>
+            <div className={`nav-item ${isActive("/app/check") ? "active" : ""}`} onClick={() => navigate("/app/check")}>
+              <div className="nav-dot"></div>병용 확인
+            </div>
             <div className="nav-label">알림</div>
             <div className="nav-item">
               <div className="nav-dot"></div>알림

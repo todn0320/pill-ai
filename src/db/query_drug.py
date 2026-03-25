@@ -1,6 +1,6 @@
 """
 Oracle DB 쿼리 함수 모음
-약 검색 / 상세정보 / DUR 경고 / 낱알 검색 / RAG 청크
+약 검색 / 상세정보 / DUR 경고 / 낱알 검색 / RAG 청크 / 병용금기 체크
 """
 import os
 import oracledb
@@ -138,6 +138,46 @@ def get_dur_warnings(item_seq: str, type_name: str = None) -> list:
 
     rows = cursor.fetchall()
     result = rows_to_list(cursor, rows)
+    cursor.close()
+    conn.close()
+    return result
+
+
+# ============================================================
+# 병용금기 체크 (두 약 품목코드로 확인)
+# ============================================================
+def check_drug_interaction(item_seq_a: str, item_seq_b: str) -> list:
+    """두 약의 병용금기 여부 확인 (A→B, B→A 양방향 체크)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # A → B 방향 확인
+    cursor.execute("""
+        SELECT WARNING_ID, ITEM_SEQ, TYPE_NAME, PROHBT_CONTENT,
+               MIX_ITEM_SEQ, GRADE
+        FROM REF_DUR_ITEM_WARNING
+        WHERE ITEM_SEQ = :1
+        AND MIX_ITEM_SEQ = :2
+        AND TYPE_NAME LIKE '%병용%'
+    """, [item_seq_a, item_seq_b])
+
+    rows = cursor.fetchall()
+    result = rows_to_list(cursor, rows)
+
+    # B → A 방향도 확인 (역방향)
+    if not result:
+        cursor.execute("""
+            SELECT WARNING_ID, ITEM_SEQ, TYPE_NAME, PROHBT_CONTENT,
+                   MIX_ITEM_SEQ, GRADE
+            FROM REF_DUR_ITEM_WARNING
+            WHERE ITEM_SEQ = :1
+            AND MIX_ITEM_SEQ = :2
+            AND TYPE_NAME LIKE '%병용%'
+        """, [item_seq_b, item_seq_a])
+
+        rows = cursor.fetchall()
+        result = rows_to_list(cursor, rows)
+
     cursor.close()
     conn.close()
     return result

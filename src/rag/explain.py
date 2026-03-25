@@ -1,6 +1,7 @@
 """
 RAG 기반 약 설명 생성 모듈
 Azure AI Search + Azure OpenAI 연동
+퍼지 검색 (오타 교정) 포함
 """
 import os
 from dotenv import load_dotenv
@@ -20,7 +21,6 @@ INDEX_NAME = os.environ.get("AZURE_SEARCH_INDEX", "pill-rag-index")
 OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
 OPENAI_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
 
-# AZURE_OPENAI_KEY or AZURE_OPENAI_API_KEY 둘 다 허용
 OPENAI_KEY = (
     os.environ.get("AZURE_OPENAI_API_KEY")
     or os.environ.get("AZURE_OPENAI_KEY")
@@ -28,7 +28,7 @@ OPENAI_KEY = (
 
 
 # ============================================================
-# Azure AI Search - 관련 청크 검색
+# Azure AI Search - 관련 청크 검색 (RAG용)
 # ============================================================
 def search_relevant_chunks(query: str, item_seq: str = None, top: int = 5) -> list:
     """질문과 관련된 RAG 청크 검색"""
@@ -61,6 +61,54 @@ def search_relevant_chunks(query: str, item_seq: str = None, top: int = 5) -> li
 
 
 # ============================================================
+# Azure AI Search - 퍼지 검색 (오타 교정용)
+# ============================================================
+def fuzzy_search_drug(name: str, top: int = 5) -> list:
+    """
+    Azure AI Search 퍼지 검색으로 유사 약 이름 검색
+    '타이래놀' → '타이레놀' 자동 매칭
+    검색어 뒤에 ~ 붙이면 편집 거리 기반 퍼지 검색 활성화
+    """
+    search_client = SearchClient(
+        endpoint=SEARCH_ENDPOINT,
+        index_name=INDEX_NAME,
+        credential=AzureKeyCredential(SEARCH_KEY)
+    )
+
+    # 퍼지 검색: 검색어~ 형태로 오타 허용
+    fuzzy_query = f"{name}~"
+
+    results = search_client.search(
+        search_text=fuzzy_query,
+        top=top,
+        select=["item_seq", "item_name", "source_type"],
+        search_fields=["item_name", "chunk_text"]
+    )
+
+    seen = set()
+    suggestions = []
+
+    for r in results:
+        item_name = r.get("item_name", "")
+        item_seq = r.get("item_seq", "")
+
+        if not item_name or item_seq in seen:
+            continue
+
+        seen.add(item_seq)
+        suggestions.append({
+            "item_seq": item_seq,
+            "item_name": item_name,
+            "score": r.get("@search.score", 0),
+        })
+
+        if len(suggestions) >= top:
+            break
+
+    return suggestions
+
+
+# ============================================================
 # Azure OpenAI - RAG 답변 생성
 # ============================================================
 def generate_rag_answer(question: str, chunks: list, drug_name: str = "") -> str:
@@ -69,7 +117,6 @@ def generate_rag_answer(question: str, chunks: list, drug_name: str = "") -> str
     if not chunks:
         return "관련 약 정보를 찾을 수 없습니다. 의사나 약사에게 문의하세요."
 
-    # 청크 텍스트 합치기
     context = ""
     for chunk in chunks:
         section = chunk.get("section_type", "")
@@ -132,7 +179,6 @@ def generate_explanation(drug_info: dict) -> str:
     item_seq = top.get("ITEM_SEQ", "")
     item_name = safe_text(top.get("ITEM_NAME", ""))
 
-    # Azure OpenAI가 설정되어 있으면 RAG 답변 생성
     if OPENAI_ENDPOINT and OPENAI_KEY and item_seq:
         try:
             chunks = search_relevant_chunks(
@@ -148,14 +194,11 @@ def generate_explanation(drug_info: dict) -> str:
         except Exception as e:
             print(f"RAG 답변 생성 실패: {e}")
 
-    # fallback - 기존 방식
     parts = []
     if safe_text(top.get("ITEM_NAME")):
         parts.append(f"인식된 약은 {safe_text(top.get('ITEM_NAME'))}입니다.")
     if safe_text(top.get("ENTP_NAME")):
         parts.append(f"제조사: {safe_text(top.get('ENTP_NAME'))}")
-    if safe_text(top.get("ETC_OTC_CODE")):
-        parts.append(f"구분: {safe_text(top.get('ETC_OTC_CODE'))}")
     if shorten_text(top.get("EFCY_QESITM")):
         parts.append(f"효능·효과: {shorten_text(top.get('EFCY_QESITM'))}")
     if shorten_text(top.get("ATPN_QESITM")):

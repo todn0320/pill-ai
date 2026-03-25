@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from src.pipeline.run_pipeline import run_pipeline
 from src.db.query_drug import (
     search_drug_by_name,
@@ -8,10 +9,20 @@ from src.db.query_drug import (
     get_dur_warnings,
     search_pill_by_shape,
     get_rag_chunks,
+    check_drug_interaction,
 )
-from src.rag.explain import search_relevant_chunks, generate_rag_answer
+from src.rag.explain import search_relevant_chunks, generate_rag_answer, fuzzy_search_drug
 
 app = FastAPI(title="Pill AI API", description="약 식별 + 복약 관리 AI 서비스")
+
+# CORS 설정 (프론트엔드 연동)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ============================================================
@@ -23,7 +34,7 @@ def root():
 
 
 # ============================================================
-# 이미지 인식 (기존)
+# 이미지 인식
 # ============================================================
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
@@ -59,6 +70,40 @@ def drug_search(
     try:
         results = search_drug_by_name(name, limit)
         return {"query": name, "count": len(results), "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# 퍼지 검색 (오타 교정 - Azure AI Search)
+# ============================================================
+@app.get("/drug/suggest")
+def drug_suggest(
+    name: str = Query(..., description="검색어 (오타 포함 가능, 예: 타이래놀)"),
+    top: int = Query(5, description="최대 추천 수")
+):
+    """
+    Azure AI Search 퍼지 검색으로 유사 약 이름 추천
+    오타나 유사어 입력 시 올바른 약 이름 추천
+    - GET /drug/suggest?name=타이래놀
+    - GET /drug/suggest?name=아스피빈
+    """
+    try:
+        # 1. 먼저 정확한 검색
+        exact = search_drug_by_name(name, limit=3)
+
+        # 2. 결과 없으면 Azure AI Search 퍼지 검색
+        fuzzy = []
+        if not exact:
+            fuzzy = fuzzy_search_drug(name, top=top)
+
+        return {
+            "query": name,
+            "exact_match": len(exact) > 0,
+            "exact_results": exact,
+            "suggestions": fuzzy,
+            "has_suggestions": len(fuzzy) > 0,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -109,6 +154,31 @@ def drug_dur(
 
 
 # ============================================================
+# 병용금기 체크 (두 약 이름/코드로 확인)
+# ============================================================
+@app.get("/drug/check")
+def drug_check(
+    item_seq_a: str = Query(..., description="첫 번째 약 품목코드"),
+    item_seq_b: str = Query(..., description="두 번째 약 품목코드"),
+):
+    """
+    두 약의 병용금기 여부 확인 (A→B, B→A 양방향)
+    - GET /drug/check?item_seq_a=199601110&item_seq_b=200501560
+    """
+    try:
+        warnings = check_drug_interaction(item_seq_a, item_seq_b)
+        return {
+            "item_seq_a": item_seq_a,
+            "item_seq_b": item_seq_b,
+            "is_prohibited": len(warnings) > 0,
+            "warning_count": len(warnings),
+            "warnings": warnings
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
 # 낱알 모양/색상으로 검색
 # ============================================================
 @app.get("/drug/pill")
@@ -122,7 +192,6 @@ def pill_search(
     낱알 특징으로 약 검색
     - GET /drug/pill?shape=원형&color=하양
     - GET /drug/pill?print_text=IDG
-    - GET /drug/pill?shape=타원형&color=분홍&print_text=KH
     """
     try:
         results = search_pill_by_shape(shape, color, print_text, limit)
@@ -173,20 +242,16 @@ def drug_ask(
     약에 대한 AI 질문 답변
     - GET /drug/ask?question=타이레놀+임산부+먹어도돼
     - GET /drug/ask?question=이+약+부작용뭐야&item_seq=200808876
-    - GET /drug/ask?question=아스피린+주의사항&item_name=아스피린
     """
     try:
-        # 검색 쿼리 구성
         search_query = f"{item_name} {question}" if item_name else question
 
-        # 관련 청크 검색
         chunks = search_relevant_chunks(
             query=search_query,
             item_seq=item_seq,
             top=5
         )
 
-        # AI 답변 생성
         answer = generate_rag_answer(
             question=question,
             chunks=chunks,

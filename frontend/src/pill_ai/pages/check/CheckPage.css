@@ -1,0 +1,189 @@
+.check-header-wrap {
+  padding: 16px var(--pad) 0;
+  flex-shrink: 0;
+}
+.check-header-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 20px;
+}
+.check-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--txt1);
+  margin-bottom: 4px;
+}
+.check-sub {
+  font-size: 13px;
+  color: var(--txt2);
+}
+
+.check-body {
+  flex: 1;
+  padding: 20px var(--pad) 24px;
+  overflow-y: auto;
+}
+
+/* 비커 영역 */
+.beaker-section {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px 20px 20px;
+}
+
+.beaker-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.beaker-svg {
+  width: 110px;
+  height: 138px;
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,0.06));
+}
+
+.beaker-input {
+  width: 120px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: center;
+  background: var(--bg2);
+  color: var(--txt1);
+  outline: none;
+}
+.beaker-input:focus { border-color: var(--green6); background: var(--white); }
+
+.beaker-label {
+  font-size: 12px;
+  color: var(--txt3);
+  height: 36px;
+  display: flex;
+  align-items: center;
+}
+
+.plus-sign {
+  font-size: 32px;
+  color: var(--txt3);
+  font-weight: 300;
+  padding-bottom: 36px;
+}
+
+.arrow-sign {
+  font-size: 28px;
+  color: var(--txt3);
+  padding-bottom: 36px;
+}
+
+/* 확인 버튼 */
+.check-btn-wrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+.check-btn {
+  height: 44px;
+  padding: 0 36px;
+  background: var(--green6);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.check-btn:hover { background: var(--green7); }
+.check-btn:disabled { background: var(--txt3); cursor: not-allowed; }
+
+/* 결과 카드 */
+.result-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+}
+.result-card.danger { border-color: var(--red1); }
+.result-card.safe   { border-color: var(--green1); }
+
+.result-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-lt);
+}
+
+.result-badge {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; font-weight: 600;
+  flex-shrink: 0;
+}
+.result-badge.danger  { background: var(--red5);   color: var(--red7); }
+.result-badge.safe    { background: var(--green5);  color: var(--green7); }
+.result-badge.unknown { background: var(--bg2);     color: var(--txt2); }
+
+.result-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.result-title.danger  { color: var(--red7); }
+.result-title.safe    { color: var(--green7); }
+.result-title.unknown { color: var(--txt1); }
+
+.result-drug-names {
+  font-size: 12px;
+  color: var(--txt3);
+}
+
+.result-content {
+  font-size: 13px;
+  color: var(--txt2);
+  line-height: 1.7;
+  margin-bottom: 12px;
+}
+
+.ai-answer-box {
+  background: var(--green5);
+  border: 1px solid var(--green1);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.ai-answer-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green7);
+  margin-bottom: 6px;
+}
+.ai-answer-text {
+  font-size: 13px;
+  color: var(--green8);
+  line-height: 1.7;
+  margin: 0;
+}
+
+.result-footer {
+  font-size: 11px;
+  color: var(--txt3);
+  padding-top: 10px;
+  border-top: 1px solid var(--border-lt);
+}
